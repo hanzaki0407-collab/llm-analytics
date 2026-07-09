@@ -2,8 +2,12 @@ name: Supabase Keepalive
 
 # 無料/nano枠の Supabase プロジェクトは「7日間アクセスなし」で自動 pause される。
 # 月次収集（monthly-collect.yml）だけだと月1回しかDBを叩かず、収集を止めている期間に
-# 自動 pause→ダッシュボードが落ちる。週1回の軽量SELECTでDBアクティビティを発生させ、
-# 自動 pause を防ぐ。
+# 自動 pause→ダッシュボードが落ちる。軽量SELECTでDBアクティビティを発生させ、自動 pause を防ぐ。
+#
+# 2026-07-09: 週1(月曜)運用にも関わらず、7/6の keepalive 成功から3日で pause 再発を確認。
+# 週1は7日閾値ギリギリで安全マージンが薄く、cron遅延や閾値の厳格化に耐えられない。
+# → 毎日実行に変更（GitHub Actions無料枠で1回11秒程度＝実質コストゼロ）。
+# 最大ギャップ1日で7日閾値に対し十分な余裕を確保し、pause 再発を24h以内に赤ランで検知できる。
 #
 # 必要な GitHub Secrets（既存の monthly-collect.yml と共通）:
 #   - NEXT_PUBLIC_SUPABASE_URL
@@ -11,8 +15,8 @@ name: Supabase Keepalive
 
 on:
   schedule:
-    # 毎週月曜 00:00 UTC = 09:00 JST（7日の pause 判定に十分間に合う間隔）
-    - cron: "0 0 * * 1"
+    # 毎日 00:00 UTC = 09:00 JST（7日の pause 判定に対し最大1日ギャップの大きな余裕）
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 jobs:
