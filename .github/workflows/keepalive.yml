@@ -7,7 +7,12 @@ name: Supabase Keepalive
 # 2026-07-09: 週1(月曜)運用にも関わらず、7/6の keepalive 成功から3日で pause 再発を確認。
 # 週1は7日閾値ギリギリで安全マージンが薄く、cron遅延や閾値の厳格化に耐えられない。
 # → 毎日実行に変更（GitHub Actions無料枠で1回11秒程度＝実質コストゼロ）。
-# 最大ギャップ1日で7日閾値に対し十分な余裕を確保し、pause 再発を24h以内に赤ランで検知できる。
+#
+# 2026-07-31: 毎日1回×1クエリを全て成功させていたのに pause 予告メールが再度届いた。
+# 公式ドキュメントの基準は「1日に数回(a few user requests each day)のDBリクエストが
+# 1週間続くこと」＝1日1クエリでは "sufficient activity" に届かない。
+# → 1日4回(6時間おき)×各5クエリ=1日20クエリに増強。
+#   https://supabase.com/docs/guides/platform/free-project-pausing
 #
 # 必要な GitHub Secrets（既存の monthly-collect.yml と共通）:
 #   - NEXT_PUBLIC_SUPABASE_URL
@@ -15,8 +20,8 @@ name: Supabase Keepalive
 
 on:
   schedule:
-    # 毎日 00:00 UTC = 09:00 JST（7日の pause 判定に対し最大1日ギャップの大きな余裕）
-    - cron: "0 0 * * *"
+    # 6時間おき（00/06/12/18 UTC）。「1日に数回」基準を毎日確実に満たす
+    - cron: "0 0,6,12,18 * * *"
   workflow_dispatch:
 
 jobs:
@@ -34,17 +39,18 @@ jobs:
             echo "::error::Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY secret."
             exit 1
           fi
-          echo "Pinging Supabase REST API to keep the project active..."
-          HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
-            "${SUPABASE_URL}/rest/v1/companies?select=id&limit=1" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")
-          echo "HTTP ${HTTP_CODE}"
-          cat /tmp/resp.json || true
-          echo ""
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "✅ Supabase responded OK — project is active."
-          else
-            echo "::error::Unexpected status ${HTTP_CODE}. The project may be paused — restore it in the Supabase dashboard."
-            exit 1
-          fi
+          echo "Pinging Supabase REST API to keep the project active (5 queries)..."
+          for i in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+              "${SUPABASE_URL}/rest/v1/companies?select=id&limit=${i}" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")
+            echo "query ${i}: HTTP ${HTTP_CODE}"
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+              cat /tmp/resp.json || true
+              echo "::error::Unexpected status ${HTTP_CODE}. The project may be paused — restore it in the Supabase dashboard."
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "✅ Supabase responded OK to all 5 queries — project is active."
